@@ -1,0 +1,15 @@
+[project]
+name = "eng-python-env"
+version = "0.1.0"
+description = "Engineering Python Environment with Essential Libraries"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "numpy",
+  "scipy",
+  "sympy",
+  "matplotlib",
+  "pandas",
+  "control",
+  "dysys>=0.1.10"
+]
