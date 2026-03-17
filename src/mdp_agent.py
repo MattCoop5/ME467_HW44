@@ -2,15 +2,19 @@ import random
 from collections import Counter
 
 # Grid dimensions
-WIDTH, HEIGHT = 4, 4
+WIDTH, HEIGHT = 4, 3
 # Terminal states and their rewards
-GOAL = (4, 4)
-HAZARD = (4, 3)
+GOAL = (4, 3)
+HAZARD = (4, 2)
 TERMINALS = {GOAL: +1.0, HAZARD: -1.0}
 # Living reward for non-terminal states
 LIVING_REWARD = -0.04
-# All states: every grid cell
-STATES = [(x, y) for x in range(1, WIDTH + 1) for y in range(1, HEIGHT + 1)]
+# Wall position
+WALL = (2, 2)
+# All valid states: every grid cell except the wall
+STATES = [
+    (x, y) for x in range(1, WIDTH + 1) for y in range(1, HEIGHT + 1) if (x, y) != WALL
+]
 # Actions and their (dx, dy) displacements
 ACTIONS = {
     "North": (0, 1),
@@ -18,6 +22,7 @@ ACTIONS = {
     "East": (1, 0),
     "West": (-1, 0),
 }
+ARROWS = {"North": "\u2191", "South": "\u2193", "East": "\u2192", "West": "\u2190"}
 
 
 def reward(state):
@@ -37,21 +42,19 @@ def get_perpendicular(action):
 
 def attempt_move(state, action):
     """Return the state that results from attempting to move in the
-    given direction. If the move would leave the grid, return the
-    original state (the robot stays put)."""
+    given direction. If the move would leave the grid or hit a wall,
+    return the original state."""
     dx, dy = ACTIONS[action]
     nx, ny = state[0] + dx, state[1] + dy
-    if 1 <= nx <= WIDTH and 1 <= ny <= HEIGHT:
+    if 1 <= nx <= WIDTH and 1 <= ny <= HEIGHT and (nx, ny) != WALL:
         return (nx, ny)
-    return state  # hit a wall, stay in place
+    return state
 
 
 def transitions(state, action):
-    """T(s' | s, a): return a dict {s': probability} for all reachable
-    states s' when taking action a in state s."""
+    """T(s' | s, a): return a dict {s': probability}."""
     if state in TERMINALS:
-        return {}  # no transitions from terminal states
-    # Intended direction (80%) and two perpendicular drifts (10% each)
+        return {}
     outcomes = {}
     intended = attempt_move(state, action)
     outcomes[intended] = outcomes.get(intended, 0) + 0.8
@@ -64,17 +67,15 @@ def transitions(state, action):
 def value_iteration(gamma=0.99, epsilon=1e-6):
     """Run value iteration and return the converged value function
     and the number of iterations."""
-    # Initialize V(s) = 0 for all states
     V = {s: 0.0 for s in STATES}
     iteration = 0
     while True:
         V_new = {}
-        delta = 0  # track the largest change
+        delta = 0
         for s in STATES:
             if s in TERMINALS:
-                V_new[s] = reward(s)  # terminal values are fixed
+                V_new[s] = reward(s)
                 continue
-            # Bellman update: V(s) = R(s) + gamma * max_a sum_s' T(s'|s,a) V(s')
             best_value = float("-inf")
             for a in ACTIONS:
                 expected = sum(
@@ -95,7 +96,7 @@ def extract_policy(V, gamma=0.99):
     policy = {}
     for s in STATES:
         if s in TERMINALS:
-            policy[s] = None  # no action in terminal states
+            policy[s] = None
             continue
         best_action = None
         best_value = float("-inf")
@@ -111,52 +112,6 @@ def extract_policy(V, gamma=0.99):
     return policy
 
 
-ARROWS = {"North": "\u2191", "South": "\u2193", "East": "\u2192", "West": "\u2190"}
-
-
-def display_grid(V, policy):
-    """Print the value function and policy as grids."""
-    print("Value function V*:")
-    for y in range(HEIGHT, 0, -1):
-        row = []
-        for x in range(1, WIDTH + 1):
-            s = (x, y)
-            row.append(f"{V[s]:7.3f}")
-        print("  ".join(row))
-    print("\nOptimal policy:")
-    for y in range(HEIGHT, 0, -1):
-        row = []
-        for x in range(1, WIDTH + 1):
-            s = (x, y)
-            if s == GOAL:
-                row.append("  GOAL ")
-            elif s == HAZARD:
-                row.append("  HAZD ")
-            else:
-                row.append(f"   {ARROWS[policy[s]]}   ")
-        print("".join(row))
-
-
-for r in [-2.0, -0.4, -0.04, -0.01, +0.01]:
-    LIVING_REWARD = r
-    V, iters = value_iteration(gamma=0.99)
-    policy = extract_policy(V, gamma=0.99)
-    print(f"\nLiving reward = {r:+.2f} (converged in {iters} iterations)")
-    # Show just the policy
-    print("Policy:")
-    for y in range(HEIGHT, 0, -1):
-        row = []
-        for x in range(1, WIDTH + 1):
-            s = (x, y)
-            if s == GOAL:
-                row.append(" GOAL")
-            elif s == HAZARD:
-                row.append(" HAZD")
-            else:
-                row.append(f"  {ARROWS[policy[s]]} ")
-        print("".join(row))
-
-
 def simulate_step(state, action):
     """Sample a next state from T(s' | s, a)."""
     dist = transitions(state, action)
@@ -165,11 +120,6 @@ def simulate_step(state, action):
     return random.choices(states, weights=probs, k=1)[0]
 
 
-V, num_iterations = value_iteration(gamma=0.99)
-policy = extract_policy(V, gamma=0.99)
-print(f"Converged in {num_iterations} iterations.\n")
-display_grid(V, policy)
-
 random.seed(42)
 counts = Counter()
 for _ in range(10_000):
@@ -177,3 +127,44 @@ for _ in range(10_000):
 print("Empirical transition frequencies from (3,1), action North:")
 for s, c in sorted(counts.items()):
     print(f"  {s}: {c / 10_000:.3f}")
+
+
+def run_episode(policy, start=(1, 1), max_steps=100):
+    """Simulate one episode following the given policy.
+    Returns:
+        trajectory: list of states visited (including start)
+        total_reward: sum of R(s) over all visited states
+        outcome: "goal", "hazard", or "timeout"
+    """
+    state = start
+    trajectory = [state]
+    total_reward = reward(state)
+    for step in range(max_steps):
+        if state in TERMINALS:
+            break
+        action = policy[state]
+        state = simulate_step(state, action)
+        trajectory.append(state)
+        total_reward += reward(state)
+    if state == GOAL:
+        outcome = "goal"
+    elif state == HAZARD:
+        outcome = "hazard"
+    else:
+        outcome = "timeout"
+    return trajectory, total_reward, outcome
+
+
+random.seed(42)
+V, num_iters = value_iteration(gamma=0.99)
+optimal_policy = extract_policy(V, gamma=0.99)
+print(f"Value iteration converged in {num_iters} iterations.\n")
+results = [run_episode(optimal_policy) for _ in range(1000)]
+outcomes = [r[2] for r in results]
+rewards = [r[1] for r in results]
+goal_rate = outcomes.count("goal") / 1000
+hazard_rate = outcomes.count("hazard") / 1000
+avg_reward = sum(rewards) / 1000
+print(f"Goal reached:  {goal_rate:.3f}")
+print(f"Hazard hit:    {hazard_rate:.3f}")
+print(f"Avg reward:    {avg_reward:.3f}")
